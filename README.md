@@ -3,6 +3,8 @@
 ![Go2 Velodyne Gazebo RViz Launch](.docs/gazebo_velodyne_rviz_launch.png)
 ![Go2 Velodyne Agent](images/go2_pose_rosa.gif)
 
+- It takes time to execute the commands
+
 ## 🤖 Overview
 
 This package provides a ROS2 agent node for controlling the Unitree Go2 quadruped robot using natural language commands. The system uses:
