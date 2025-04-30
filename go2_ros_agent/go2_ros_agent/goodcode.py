@@ -6,7 +6,7 @@ This node implements a ROSA (ROS Operating System Agent) for controlling
 the Unitree Go2 quadruped robot using natural language commands.
 It uses a local LLM to interpret commands and execute them through ROS topics.
 
-Author: User
+Author: AbdullahGM1
 License: MIT
 """
 
@@ -32,7 +32,6 @@ class Go2AgentNode(Node):
         # ============================= INITIALIZE NODE =============================
         # Initialize publishers
         self.publisher_ = self.create_publisher(Twist, '/cmd_vel', 10)
-        # self.publisher_ = self.create_publisher(Twist, '/turtle1/cmd_vel', 10)
         
         # Initialize CV Bridge for image processing
         self.bridge = CvBridge()
@@ -46,7 +45,7 @@ class Go2AgentNode(Node):
         # Setup the agent
         self.setup_agent()
         
-        self.get_logger().info("ROSA Unitree Go2 Agent is ready. Type a command:")
+        self.get_logger().info("ROSA Go2 Agent is ready. Type a command:")
 
     def setup_agent(self):
         """Setup the ROSA agent with LLM and tools"""
@@ -73,11 +72,12 @@ class Go2AgentNode(Node):
     def _initialize_llm(self):
         """Initialize and configure the local LLM"""
         return ChatOllama(
-            model="qwen2.5:14b",  # Use a smaller model for faster inference
+            # model="llama3.1:8b",
+            model="qwen2.5:14b",
+            # model="mistral-nemo:12b",
             temperature=0.0,
-            max_retries=1,  # Reduced retry count
-            num_ctx=4096,    # Reduced context size for faster processing
-            request_timeout=30.0  # Add timeout to prevent hanging
+            max_retries=2,
+            num_ctx=8192,
         )
     
     def _create_prompts(self):
@@ -110,46 +110,37 @@ class Go2AgentNode(Node):
             Move the Unitree Go2 robot forward/backward by the specified distance (in meters)
             using closed-loop control with position feedback.
             """
-            # Use faster speed for quicker execution
-            linear_speed = 0.5  # 0.5 m/s is a reasonable walking speed for Go2
+            linear_speed = 2.0  # Lower speed for more precise control
             twist = Twist()
             
-            # Set a timeout to prevent hanging
-            max_execution_time = min(30.0, abs(distance) / linear_speed * 2.0)
-            
-            # Get initial pose - use a fast version that doesn't capture all data
+            # Get initial pose
             try:
-                initial_pose = get_robot_pose()
+                initial_pose = get_robot_pose.invoke({})
                 if "error" in initial_pose:
                     return f"Error getting pose: {initial_pose['error']}"
             except Exception as e:
                 return f"Error getting pose: {str(e)}"
                 
+            target_distance = abs(distance)  # We'll handle direction separately
+            distance_moved = 0.0
             initial_x = initial_pose["x"]
             initial_y = initial_pose["y"]
-            target_distance = abs(distance)
             
             # Set direction
             direction = 1.0 if distance >= 0 else -1.0
             twist.linear.x = direction * linear_speed
             
-            # Create a rate object with higher frequency
-            rate = node_instance.create_rate(10)  # Reduced from 20Hz to 10Hz
+            # Create a rate object for controlling loop frequency
+            rate = node_instance.create_rate(20)  # 20Hz control loop
             
-            # Start time for timeout
-            start_time = time.time()
+            # Debug output
+            node_instance.get_logger().info(f"Starting motion: target={target_distance}, direction={direction}")
+            node_instance.get_logger().info(f"Initial position: x={initial_x}, y={initial_y}")
             
-            # Use simpler loop condition
             while rclpy.ok():
-                # Check timeout
-                if time.time() - start_time > max_execution_time:
-                    twist.linear.x = 0.0
-                    node_instance.publisher_.publish(twist)
-                    return f"Motion timed out after {max_execution_time:.1f} seconds. Target was {target_distance:.2f} meters."
-                
-                # Get current pose with minimal data
+                # Get current pose
                 try:
-                    current_pose = get_robot_pose()
+                    current_pose = get_robot_pose.invoke({})
                     if "error" in current_pose:
                         twist.linear.x = 0.0
                         node_instance.publisher_.publish(twist)
@@ -159,30 +150,43 @@ class Go2AgentNode(Node):
                     node_instance.publisher_.publish(twist)
                     return f"Error during movement: {str(e)}"
                 
-                # Fast distance calculation
+                # Calculate distance moved using odometry
                 dx = current_pose["x"] - initial_x
                 dy = current_pose["y"] - initial_y
                 distance_moved = math.sqrt(dx*dx + dy*dy)
                 
-                # Check if we've reached the target
+                # Debug output every 0.5 seconds (approximately)
+                if int(distance_moved * 10) % 5 == 0:
+                    node_instance.get_logger().debug(
+                        f"Current position: x={current_pose['x']:.2f}, y={current_pose['y']:.2f}, "
+                        f"moved={distance_moved:.2f}, target={target_distance:.2f}"
+                    )
+                
+                # Check if we've reached or exceeded the target distance
                 if distance_moved >= target_distance:
                     break
                 
-                # Simplify speed adjustment - only slow down very close to target
-                if target_distance - distance_moved < 0.3:  # 30cm from target
-                    twist.linear.x = direction * 0.2  # Slow down to 0.2 m/s
+                # Adjust speed as we approach target
+                remaining = target_distance - distance_moved
+                if remaining < 1.0:  # Within 1 unit of target
+                    twist.linear.x = direction * max(0.5, remaining)  # Slow down, min 0.5
                 
                 # Publish command
                 node_instance.publisher_.publish(twist)
+                rclpy.spin_once(node_instance)
                 rate.sleep()
             
-            # Stop the robot - send stop command multiple times
+            # Stop the robot
             twist.linear.x = 0.0
-            for _ in range(3):  # Reduced from 5 to 3
+            node_instance.publisher_.publish(twist)
+            # Send stop command multiple times to ensure it stops
+            for _ in range(5):
                 node_instance.publisher_.publish(twist)
                 time.sleep(0.01)
             
-            return f"Moved {'forward' if distance >= 0 else 'backward'} {target_distance:.2f} meters."
+            node_instance.get_logger().info(f"Motion complete: moved={distance_moved:.2f}, target={target_distance:.2f}")
+            
+            return f"Moved {'forward' if distance >= 0 else 'backward'} {target_distance:.2f} units (actual: {distance_moved:.2f})."
 
         @tool
         def publish_angular_motion(angle: float) -> str:
@@ -190,17 +194,13 @@ class Go2AgentNode(Node):
             Rotate the Unitree Go2 robot by specified degrees using closed-loop control.
             Positive values rotate clockwise, negative values rotate counterclockwise.
             """
-            # Use faster angular speed
-            angular_speed = 1.0  # radians/second - increased from 0.8
+            angular_speed = 0.8  # radians/second - reduced for more control
             angle_radians = math.radians(angle)
             twist = Twist()
             
-            # Set a maximum execution time to prevent hanging
-            max_execution_time = min(15.0, abs(angle_radians) / angular_speed * 2.0)
-            
-            # Get initial pose with minimal data
+            # Get initial pose
             try:
-                initial_pose = get_robot_pose()
+                initial_pose = get_robot_pose.invoke({})
                 if "error" in initial_pose:
                     return f"Error getting pose: {initial_pose['error']}"
             except Exception as e:
@@ -215,22 +215,13 @@ class Go2AgentNode(Node):
             direction = 1.0 if angle_radians >= 0 else -1.0
             twist.angular.z = direction * angular_speed
             
-            # Create a rate object with lower frequency
-            rate = node_instance.create_rate(10)  # Reduced from 20Hz to 10Hz
-            
-            # Start time for timeout
-            start_time = time.time()
+            # Create a rate object for controlling loop frequency
+            rate = node_instance.create_rate(20)  # 20Hz control loop
             
             while rclpy.ok():
-                # Check timeout
-                if time.time() - start_time > max_execution_time:
-                    twist.angular.z = 0.0
-                    node_instance.publisher_.publish(twist)
-                    return f"Rotation timed out after {max_execution_time:.1f} seconds. Target was {angle:.0f} degrees."
-                
-                # Get current pose with minimal data
+                # Get current pose
                 try:
-                    current_pose = get_robot_pose()
+                    current_pose = get_robot_pose.invoke({})
                     if "error" in current_pose:
                         twist.angular.z = 0.0
                         node_instance.publisher_.publish(twist)
@@ -247,23 +238,31 @@ class Go2AgentNode(Node):
                 # Normalize to [-π, π]
                 angle_diff = ((angle_diff + math.pi) % (2 * math.pi)) - math.pi
                 
-                # Check if we've reached the target angle (with wider tolerance)
-                if abs(angle_diff) < 0.08:  # ~4.5 degrees tolerance (increased from 0.05)
+                # Check if we've reached the target angle (with small tolerance)
+                if abs(angle_diff) < 0.05:  # ~3 degrees tolerance
                     break
                 
-                # Simplified speed adjustment - only slow down very close to target
-                if abs(angle_diff) < 0.3:  # ~17 degrees from target
-                    twist.angular.z = direction * 0.4  # Fixed slower speed
+                # Adjust speed as we approach target
+                if abs(angle_diff) < 0.5:  # ~30 degrees from target
+                    # Slow down proportionally to remaining angle
+                    twist.angular.z = direction * max(0.2, abs(angle_diff))
+                else:
+                    # Keep constant speed
+                    twist.angular.z = direction * angular_speed
+                
+                # If the shortest path changed, adjust direction
+                if (angle_diff * direction) < 0:
+                    direction = -direction
+                    twist.angular.z = direction * abs(twist.angular.z)
                 
                 # Publish command
                 node_instance.publisher_.publish(twist)
+                rclpy.spin_once(node_instance)
                 rate.sleep()
             
             # Stop rotation
             twist.angular.z = 0.0
-            for _ in range(3):  # Send stop command multiple times
-                node_instance.publisher_.publish(twist)
-                time.sleep(0.01)
+            node_instance.publisher_.publish(twist)
             
             return f"Rotated {angle:.0f}° {'clockwise' if angle >= 0 else 'counterclockwise'}."
 
@@ -275,12 +274,12 @@ class Go2AgentNode(Node):
             Returns position, orientation, and velocity information.
             """
             pose_data = {}
-            msg_received = threading.Event()
 
             def callback(msg):
-                # Extract only necessary data (position and yaw)
+                # Extract position
                 pose_data["x"] = round(msg.pose.pose.position.x, 2)
                 pose_data["y"] = round(msg.pose.pose.position.y, 2)
+                pose_data["z"] = round(msg.pose.pose.position.z, 2)
                 
                 # Extract orientation as quaternion
                 qx = msg.pose.pose.orientation.x
@@ -288,18 +287,35 @@ class Go2AgentNode(Node):
                 qz = msg.pose.pose.orientation.z
                 qw = msg.pose.pose.orientation.w
                 
-                # Only calculate yaw (we mostly need this for navigation)
+                # Convert quaternion to euler angles (roll, pitch, yaw)
+                # Roll (rotation around x-axis)
+                sinr_cosp = 2 * (qw * qx + qy * qz)
+                cosr_cosp = 1 - 2 * (qx * qx + qy * qy)
+                roll = math.atan2(sinr_cosp, cosr_cosp)
+                
+                # Pitch (rotation around y-axis)
+                sinp = 2 * (qw * qy - qz * qx)
+                if abs(sinp) >= 1:
+                    pitch = math.copysign(math.pi / 2, sinp)  # Use 90 degrees if out of range
+                else:
+                    pitch = math.asin(sinp)
+                
+                # Yaw (rotation around z-axis)
                 siny_cosp = 2 * (qw * qz + qx * qy)
                 cosy_cosp = 1 - 2 * (qy * qy + qz * qz)
                 yaw = math.atan2(siny_cosp, cosy_cosp)
                 
-                pose_data["yaw"] = round(yaw, 2)
+                pose_data["roll"] = round(roll, 2)
+                pose_data["pitch"] = round(pitch, 2)
+                pose_data["yaw"] = round(yaw, 2)  
                 
-                # Only extract linear.x velocity as it's the most commonly used
+                # Extract twist (velocity)
                 pose_data["linear_x"] = round(msg.twist.twist.linear.x, 2)
+                pose_data["linear_y"] = round(msg.twist.twist.linear.y, 2)
+                pose_data["linear_z"] = round(msg.twist.twist.linear.z, 2)
+                pose_data["angular_x"] = round(msg.twist.twist.angular.x, 2)
+                pose_data["angular_y"] = round(msg.twist.twist.angular.y, 2)
                 pose_data["angular_z"] = round(msg.twist.twist.angular.z, 2)
-                
-                msg_received.set()
 
             sub = node_instance.create_subscription(
                 Odometry,
@@ -307,14 +323,17 @@ class Go2AgentNode(Node):
                 callback,
                 10
             )
-            
-            # Wait for the message with a shorter timeout (2 seconds)
-            if not msg_received.wait(timeout=2.0):
-                node_instance.destroy_subscription(sub)
+            # Wait for the message with a timeout (max 5 seconds)
+            timeout = 5
+            start_time = time.time()
+            while time.time() - start_time < timeout:
+                if pose_data:
+                    break
+                rclpy.spin_once(node_instance, timeout_sec=0.1)
+
+            if not pose_data:
                 return {"error": "Odometry data not received in time. Is the topic available?"}
 
-            # Clean up subscription immediately
-            node_instance.destroy_subscription(sub)
             return pose_data
 
         # ============================= CAMERA TOOLS =============================
@@ -391,13 +410,9 @@ class Go2AgentNode(Node):
             First rotates to face the target, then moves in a straight line.
             Coordinates are in meters relative to the world frame.
             """
-            # Use timeout to prevent hanging
-            max_execution_time = 60.0  # 1 minute max for the entire operation
-            start_time = time.time()
-            
-            # Get current pose with minimal processing
+            # Get current pose
             try:
-                current_pose = get_robot_pose()
+                current_pose = get_robot_pose.invoke({})
                 if "error" in current_pose:
                     return f"Error getting initial pose: {current_pose['error']}"
             except Exception as e:
@@ -414,7 +429,7 @@ class Go2AgentNode(Node):
             distance_to_target = math.sqrt(dx*dx + dy*dy)
             
             # If we're already very close to the target, just return
-            if distance_to_target < 0.10:  # 10cm tolerance
+            if distance_to_target < 0.05:  # 5cm tolerance
                 return f"Already at target position ({target_x:.2f}, {target_y:.2f})"
                 
             # Calculate the angle to the target position
@@ -428,35 +443,36 @@ class Go2AgentNode(Node):
             # Convert radians to degrees for the rotation command
             rotation_degrees = math.degrees(rotation_needed)
             
-            # Skip detailed logging to improve speed
+            # Log the calculations
+            node_instance.get_logger().info(
+                f"Moving to pose: current=({current_x:.2f}, {current_y:.2f}, {math.degrees(current_yaw):.1f}°), "
+                f"target=({target_x:.2f}, {target_y:.2f})"
+            )
+            node_instance.get_logger().info(
+                f"Calculations: distance={distance_to_target:.2f}, target_angle={math.degrees(target_angle):.1f}°, "
+                f"rotation_needed={rotation_degrees:.1f}°"
+            )
             
-            # Step 1: Rotate to face the target - with reduced angle precision for speed
-            # If the angle is very small, skip rotation
-            if abs(rotation_degrees) > 5.0:  # Only rotate if more than 5 degrees off
-                rotation_result = publish_angular_motion(rotation_degrees)
-            else:
-                rotation_result = "Skipped rotation (angle too small)"
-            
-            # Check timeout after rotation
-            if time.time() - start_time > max_execution_time:
-                return f"Operation timed out after rotation. Target was ({target_x:.2f}, {target_y:.2f})"
+            # Step 1: Rotate to face the target
+            rotation_result = publish_angular_motion.invoke({"angle": rotation_degrees})
+            node_instance.get_logger().info(f"Rotation result: {rotation_result}")
             
             # Step 2: Move forward to the target
-            movement_result = publish_linear_motion(distance_to_target)
+            movement_result = publish_linear_motion.invoke({"distance": distance_to_target})
+            node_instance.get_logger().info(f"Movement result: {movement_result}")
             
-            # Get final pose to report actual position - but only if we have time
-            if time.time() - start_time < max_execution_time - 1:
-                try:
-                    final_pose = get_robot_pose()
-                    final_x = final_pose.get("x", "unknown")
-                    final_y = final_pose.get("y", "unknown")
-                    final_position = f"({final_x}, {final_y})"
-                except Exception:
-                    final_position = "unknown"
-            else:
-                final_position = "(position check skipped to save time)"
+            # Get final pose to report actual position
+            try:
+                final_pose = get_robot_pose.invoke({})
+                final_x = final_pose.get("x", "unknown")
+                final_y = final_pose.get("y", "unknown")
+                final_position = f"({final_x}, {final_y})"
+            except Exception:
+                final_position = "unknown"
             
-            return f"Moved to ({target_x:.2f}, {target_y:.2f}). Final position: {final_position}"
+            return (f"Moved to position ({target_x:.2f}, {target_y:.2f}). "
+                    f"First rotated {rotation_degrees:.1f}° then moved forward {distance_to_target:.2f} units. "
+                    f"Final position: {final_position}")
                     
         @tool
         def stop_camera() -> dict:
@@ -477,8 +493,6 @@ class Go2AgentNode(Node):
                 
             # Make sure all OpenCV windows are closed
             cv2.destroyAllWindows()
-            
-            return {"message": "Camera stopped successfully."}
                 
         @tool
         def calculate_angle_between_points(from_x: float, from_y: float, to_x: float, to_y: float) -> dict:
@@ -500,7 +514,7 @@ class Go2AgentNode(Node):
                 "distance": math.sqrt(dx*dx + dy*dy)
             }
             
-        # Return all tools for the Unitree Go2 robot
+                    # Return all tools for the Unitree Go2 robot
         return [
             publish_linear_motion,
             publish_angular_motion,
@@ -520,46 +534,31 @@ def main(args=None):
     try:
         # ============================= INTERACTIVE COMMAND LOOP =============================
         print("🐕 Unitree Go2 ROSA Agent initialized. Ready for commands.")
-        
-        # Create executor for efficient ROS callback processing
-        executor = rclpy.executors.SingleThreadedExecutor()
-        executor.add_node(node)
-        
-        # Run executor in a separate thread for better performance
-        executor_thread = threading.Thread(target=executor.spin, daemon=True)
-        executor_thread.start()
-        
         while rclpy.ok():
             user_input = input("🧠 Your command > ")
             if user_input.strip().lower() in ["exit", "quit"]:
                 print("Exiting...")
                 break
-            
-            print("🤖 Go2: Processing command...")  # Immediate feedback
             response = node.agent.invoke(user_input)
             print(f"🤖 Go2: {response}")
+            
+            # Ensure ROS callbacks are processed even during the command loop
+            rclpy.spin_once(node, timeout_sec=0.01)
             
     except KeyboardInterrupt:
         print("\n[!] Interrupted. Shutting down.")
     finally:
-        # Make sure to clean up resources
+        # Make sure to clean up the camera thread if it's running
         with node.camera_lock:
             if node.camera_active:
                 node.camera_active = False
                 
         if node.camera_thread is not None and node.camera_thread.is_alive():
             node.camera_thread.join(timeout=1.0)
-        
-        # Also join the executor thread
-        if 'executor_thread' in locals() and executor_thread is not None and executor_thread.is_alive():
-            executor_thread.join(timeout=1.0)
             
         # Make sure all OpenCV windows are closed
         cv2.destroyAllWindows()
-        
-        # Shutdown ROS properly
-        if 'executor' in locals():
-            executor.shutdown()
+            
         node.destroy_node()
         rclpy.shutdown()
 
