@@ -1,6 +1,7 @@
 #  Unitree Go2 ROSA Agent
 
 ![Go2 Velodyne Gazebo RViz Launch](.docs/gazebo_velodyne_rviz_launch.png)
+![Go2 Velodyne Agent](images/go2_pose_rosa.gif)
 
 ## 🤖 Overview
 
@@ -10,6 +11,8 @@ This package provides a ROS2 agent node for controlling the Unitree Go2 quadrupe
 - 🔄 ROSA (ROS Operating System Agent) for command interpretation
 - 🎮 ROS2 control interfaces for the Go2 robot
 - 📷 Camera integration for visual feedback
+
+| **Note: The agent stil under improvement!
 
 ## 📦 Package Contents
 
