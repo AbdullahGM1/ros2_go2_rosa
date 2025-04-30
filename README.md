@@ -12,7 +12,7 @@ This package provides a ROS2 agent node for controlling the Unitree Go2 quadrupe
 - 🎮 ROS2 control interfaces for the Go2 robot
 - 📷 Camera integration for visual feedback
 
-| **Note: The agent stil under improvement!
+| *Note*: The agent stil under improvement!
 
 ## 📦 Package Contents
 
