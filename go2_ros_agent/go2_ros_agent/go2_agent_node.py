@@ -6,7 +6,7 @@ This node implements a ROSA (ROS Operating System Agent) for controlling
 the Unitree Go2 quadruped robot using natural language commands.
 It uses a local LLM to interpret commands and execute them through ROS topics.
 
-Author: User
+Author: AbdullaGo2_robot_agent_noce (code)hGM1
 License: MIT
 """
 
