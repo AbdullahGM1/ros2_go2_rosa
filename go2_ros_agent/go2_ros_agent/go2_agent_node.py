@@ -117,9 +117,9 @@ class Go2AgentNode(Node):
             # Set a timeout to prevent hanging
             max_execution_time = min(30.0, abs(distance) / linear_speed * 2.0)
             
-            # Get initial pose - use a fast version that doesn't capture all data
+                            # Get initial pose - use a fast version that doesn't capture all data
             try:
-                initial_pose = get_robot_pose()
+                initial_pose = get_robot_pose.invoke()
                 if "error" in initial_pose:
                     return f"Error getting pose: {initial_pose['error']}"
             except Exception as e:
@@ -149,7 +149,7 @@ class Go2AgentNode(Node):
                 
                 # Get current pose with minimal data
                 try:
-                    current_pose = get_robot_pose()
+                    current_pose = get_robot_pose.invoke()
                     if "error" in current_pose:
                         twist.linear.x = 0.0
                         node_instance.publisher_.publish(twist)
@@ -200,7 +200,7 @@ class Go2AgentNode(Node):
             
             # Get initial pose with minimal data
             try:
-                initial_pose = get_robot_pose()
+                initial_pose = get_robot_pose.invoke()
                 if "error" in initial_pose:
                     return f"Error getting pose: {initial_pose['error']}"
             except Exception as e:
@@ -230,7 +230,7 @@ class Go2AgentNode(Node):
                 
                 # Get current pose with minimal data
                 try:
-                    current_pose = get_robot_pose()
+                    current_pose = get_robot_pose.invoke()
                     if "error" in current_pose:
                         twist.angular.z = 0.0
                         node_instance.publisher_.publish(twist)
@@ -397,7 +397,7 @@ class Go2AgentNode(Node):
             
             # Get current pose with minimal processing
             try:
-                current_pose = get_robot_pose()
+                current_pose = get_robot_pose.invoke()
                 if "error" in current_pose:
                     return f"Error getting initial pose: {current_pose['error']}"
             except Exception as e:
@@ -433,7 +433,7 @@ class Go2AgentNode(Node):
             # Step 1: Rotate to face the target - with reduced angle precision for speed
             # If the angle is very small, skip rotation
             if abs(rotation_degrees) > 5.0:  # Only rotate if more than 5 degrees off
-                rotation_result = publish_angular_motion(rotation_degrees)
+                rotation_result = publish_angular_motion.invoke(rotation_degrees)
             else:
                 rotation_result = "Skipped rotation (angle too small)"
             
@@ -442,12 +442,12 @@ class Go2AgentNode(Node):
                 return f"Operation timed out after rotation. Target was ({target_x:.2f}, {target_y:.2f})"
             
             # Step 2: Move forward to the target
-            movement_result = publish_linear_motion(distance_to_target)
+            movement_result = publish_linear_motion.invoke(distance_to_target)
             
             # Get final pose to report actual position - but only if we have time
             if time.time() - start_time < max_execution_time - 1:
                 try:
-                    final_pose = get_robot_pose()
+                    final_pose = get_robot_pose.invoke()
                     final_x = final_pose.get("x", "unknown")
                     final_y = final_pose.get("y", "unknown")
                     final_position = f"({final_x}, {final_y})"
