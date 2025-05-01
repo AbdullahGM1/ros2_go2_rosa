@@ -44,7 +44,7 @@ class Go2AgentNode(Node):
         self.declare_parameter('control_rate', 20.0)  # Hz
         self.declare_parameter('position_tolerance', 0.05)  # meters
         self.declare_parameter('angle_tolerance', 0.05)  # radians (~3 degrees)
-        self.declare_parameter('llm_model', 'qwen2.5:14b')
+        self.declare_parameter('llm_model', 'qwen3:8b')
         
         # Get parameters
         self.cmd_vel_topic = self.get_parameter('cmd_vel_topic').value

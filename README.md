@@ -67,9 +67,11 @@ pip3 install jpl-rosa
 curl -fsSL https://ollama.com/install.sh | sh
 ```
 
-6. Download the LLM model:
+6. Download the LLM model (Qwen2.5 or Qwen3):
 ```bash
-ollama run qwen2.5:14b
+ollama run qwen2.5:14b 
+### OR ###
+ollama run qwen3:14b 
 ```
 
 ## 🚀 Usage
