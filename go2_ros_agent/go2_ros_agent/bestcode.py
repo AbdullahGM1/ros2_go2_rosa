@@ -789,9 +789,26 @@ class Go2AgentNode(Node):
 
 
 def main(args=None):
-    """Main function to initialize and run the Go2AgentNode"""
+    """Main function to initialize and run the Go2AgentNode with improved CLI"""
+    import readline  # Add command history and editing capabilities
+    import os
+    from colorama import init, Fore, Style  # For colored output
+    
+    # Initialize colorama
+    init()
+    
+    # Initialize ROS
     rclpy.init(args=args)
     node = Go2AgentNode()
+    
+    # Command history file
+    history_file = os.path.expanduser('~/.go2agent_history')
+    try:
+        readline.read_history_file(history_file)
+        # Set history file size
+        readline.set_history_length(1000)
+    except FileNotFoundError:
+        pass
     
     # Create a separate thread for processing ROS callbacks
     def spin_thread():
@@ -804,48 +821,189 @@ def main(args=None):
 
     try:
         # ============================= INTERACTIVE COMMAND LOOP =============================
-        print("🐕 Unitree Go2 ROSA Agent initialized. Ready for commands.")
-        print("Type 'exit' or 'quit' to exit, 'help' for available commands.")
+        print(f"{Fore.GREEN}🐕 Unitree Go2 ROSA Agent initialized. Ready for commands.{Style.RESET_ALL}")
+        print(f"{Fore.CYAN}Type 'exit' or 'quit' to exit, 'help' for available commands.{Style.RESET_ALL}")
         
-        # Simple built-in commands
-        builtin_commands = {
-            'help': lambda: print(
-                "Available built-in commands:\n"
-                "- help: Show this help message\n"
-                "- status: Show robot status\n"
-                "- stop: Emergency stop the robot\n"
-                "- quit/exit: Exit the program\n"
-                "\nFor all other commands, the natural language agent will process your request."
-            ),
-            'status': lambda: print(f"Robot status: {node.get_robot_pose.invoke({})}"),
-            'stop': lambda: node.publisher_.publish(Twist())
+        # Simple built-in commands with improved output
+        def show_help():
+            help_text = f"""
+{Fore.YELLOW}=== Available Commands ==={Style.RESET_ALL}
+{Fore.GREEN}Basic Commands:{Style.RESET_ALL}
+  {Fore.CYAN}help{Style.RESET_ALL}             Show this help message
+  {Fore.CYAN}status{Style.RESET_ALL}           Show robot status
+  {Fore.CYAN}stop{Style.RESET_ALL}             Emergency stop the robot
+  {Fore.CYAN}quit, exit{Style.RESET_ALL}       Exit the program
+
+{Fore.GREEN}Movement Commands:{Style.RESET_ALL}
+  {Fore.CYAN}move forward 1.5{Style.RESET_ALL}   Move forward 1.5 meters
+  {Fore.CYAN}turn right 90{Style.RESET_ALL}      Turn 90 degrees clockwise
+  {Fore.CYAN}goto 2.5 3.0{Style.RESET_ALL}       Move to position (2.5, 3.0)
+  {Fore.CYAN}patrol 4 5{Style.RESET_ALL}         Patrol a 4x5 meter rectangle
+
+{Fore.GREEN}Sensor Commands:{Style.RESET_ALL}
+  {Fore.CYAN}camera{Style.RESET_ALL}           Show camera feed
+  {Fore.CYAN}position{Style.RESET_ALL}         Show current position
+  {Fore.CYAN}stop camera{Style.RESET_ALL}      Stop camera feed
+
+For all other commands, the natural language agent will process your request.
+            """
+            print(help_text)
+        
+        def show_status():
+            try:
+                pose = node.get_robot_pose.invoke({})
+                if "error" in pose:
+                    print(f"{Fore.RED}Error getting pose: {pose['error']}{Style.RESET_ALL}")
+                    return
+                
+                status = f"""
+{Fore.YELLOW}=== Robot Status ==={Style.RESET_ALL}
+{Fore.GREEN}Position:{Style.RESET_ALL} ({pose['x']}, {pose['y']}, {pose['z']})
+{Fore.GREEN}Orientation:{Style.RESET_ALL} Roll: {pose['roll_degrees']}°, Pitch: {pose['pitch_degrees']}°, Yaw: {pose['yaw_degrees']}°
+{Fore.GREEN}Speed:{Style.RESET_ALL} {pose['speed']} m/s
+{Fore.GREEN}Linear Velocity:{Style.RESET_ALL} ({pose['linear_x']}, {pose['linear_y']}, {pose['linear_z']})
+{Fore.GREEN}Angular Velocity:{Style.RESET_ALL} ({pose['angular_x']}, {pose['angular_y']}, {pose['angular_z']})
+                """
+                print(status)
+            except Exception as e:
+                print(f"{Fore.RED}Error retrieving status: {str(e)}{Style.RESET_ALL}")
+        
+        def emergency_stop():
+            try:
+                twist = Twist()
+                node.publisher_.publish(twist)
+                print(f"{Fore.RED}🛑 EMERGENCY STOP ACTIVATED - Robot movement halted{Style.RESET_ALL}")
+            except Exception as e:
+                print(f"{Fore.RED}Error during emergency stop: {str(e)}{Style.RESET_ALL}")
+        
+        # Command aliases for better UX
+        command_aliases = {
+            # Basic commands
+            'h': 'help',
+            'st': 'status',
+            '?': 'help',
+            'q': 'quit',
+            'e': 'exit',
+            
+            # Movement shortcuts
+            'f': lambda dist: f"move forward {dist}",
+            'b': lambda dist: f"move backward {dist}",
+            'r': lambda angle: f"turn right {angle}",
+            'l': lambda angle: f"turn left {angle}",
+            'g': lambda x, y: f"goto {x} {y}",
+            'p': lambda w, h, loops=1: f"patrol {w} {h} {loops}",
+            
+            # Sensor shortcuts
+            'c': 'camera',
+            'sc': 'stop camera',
+            'pos': 'position'
         }
+        
+        builtin_commands = {
+            'help': show_help,
+            'status': show_status,
+            'stop': emergency_stop
+        }
+        
+        # Command history
+        command_history = []
         
         while node.running:
             try:
-                user_input = input("🧠 Your command > ")
-                input_lower = user_input.strip().lower()
+                # Display a personalized prompt with robot status indicator
+                current_status = "✓" if node.running else "✗"
+                prompt = f"{Fore.GREEN}🤖 Go2{Style.RESET_ALL} [{Fore.CYAN}{current_status}{Style.RESET_ALL}] > "
+                user_input = input(prompt)
+                readline.write_history_file(history_file)
                 
-                if input_lower in ["exit", "quit"]:
-                    print("Exiting...")
+                input_parts = user_input.strip().split()
+                input_lower = user_input.strip().lower()
+                command_history.append(input_lower)
+                
+                # Process aliases first
+                processed_input = input_lower
+                if input_parts and input_parts[0] in command_aliases:
+                    alias = command_aliases[input_parts[0]]
+                    if callable(alias):
+                        try:
+                            # Handle parameterized aliases
+                            if len(input_parts) >= 3 and input_parts[0] == 'p':  # patrol with loops
+                                processed_input = alias(input_parts[1], input_parts[2], 
+                                                       int(input_parts[3]) if len(input_parts) > 3 else 1)
+                            elif len(input_parts) >= 3 and input_parts[0] == 'g':  # goto x y
+                                processed_input = alias(input_parts[1], input_parts[2])
+                            elif len(input_parts) >= 2:  # other commands with one parameter
+                                processed_input = alias(input_parts[1])
+                            else:
+                                print(f"{Fore.RED}Error: Not enough parameters for '{input_parts[0]}' command{Style.RESET_ALL}")
+                                continue
+                        except Exception as e:
+                            print(f"{Fore.RED}Error processing alias: {str(e)}{Style.RESET_ALL}")
+                            continue
+                    else:
+                        processed_input = alias
+                
+                # Handle basic quit commands
+                if processed_input in ["exit", "quit"]:
+                    print(f"{Fore.YELLOW}Exiting...{Style.RESET_ALL}")
                     break
-                elif input_lower in builtin_commands:
-                    # Handle built-in commands
-                    builtin_commands[input_lower]()
-                elif input_lower:
-                    # Process via ROSA agent
-                    response = node.agent.invoke(user_input)
-                    print(f"🤖 Go2: {response}")
+                    
+                # Handle built-in commands
+                elif processed_input in builtin_commands:
+                    builtin_commands[processed_input]()
+                    
+                # Handle empty input
+                elif not processed_input:
+                    continue
+                    
+                # Process via ROSA agent
+                else:
+                    print(f"{Fore.BLUE}Processing: {processed_input}{Style.RESET_ALL}")
+                    # Show animation while processing
+                    import itertools
+                    import time
+                    
+                    # Create a thread for the agent processing
+                    result = [None]
+                    error = [None]
+                    
+                    def process_command():
+                        try:
+                            result[0] = node.agent.invoke(processed_input)
+                        except Exception as e:
+                            error[0] = str(e)
+                    
+                    agent_thread = threading.Thread(target=process_command)
+                    agent_thread.daemon = True
+                    agent_thread.start()
+                    
+                    # Show spinner while processing
+                    spinner = itertools.cycle(['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'])
+                    timeout = 60  # 60 seconds max wait
+                    start_time = time.time()
+                    
+                    print(f"{Fore.YELLOW}Thinking", end='', flush=True)
+                    while agent_thread.is_alive() and time.time() - start_time < timeout:
+                        print(f"\r{Fore.YELLOW}Thinking {next(spinner)}", end='', flush=True)
+                        time.sleep(0.1)
+                    print(f"\r{' ' * 20}\r", end='', flush=True)  # Clear the spinner line
+                    
+                    if agent_thread.is_alive():
+                        print(f"{Fore.RED}Response taking too long, consider emergency stop if needed{Style.RESET_ALL}")
+                    elif error[0]:
+                        print(f"{Fore.RED}Error: {error[0]}{Style.RESET_ALL}")
+                    else:
+                        print(f"{Fore.GREEN}🤖 Go2:{Style.RESET_ALL} {result[0]}")
+                        
             except KeyboardInterrupt:
-                print("\n[!] Interrupted.")
-                break
+                print(f"\n{Fore.YELLOW}[!] Command interrupted. Type 'stop' for emergency stop.{Style.RESET_ALL}")
             except Exception as e:
-                print(f"Error processing command: {str(e)}")
+                print(f"{Fore.RED}Error processing command: {str(e)}{Style.RESET_ALL}")
             
     except Exception as e:
-        print(f"\n[!] Error: {str(e)}")
+        print(f"\n{Fore.RED}[!] Error: {str(e)}{Style.RESET_ALL}")
     finally:
-        print("\nShutting down...")
+        print(f"\n{Fore.YELLOW}Shutting down...{Style.RESET_ALL}")
         # Make sure to clean up the camera thread if it's running
         with node.camera_lock:
             if node.camera_active:
@@ -870,7 +1028,3 @@ def main(args=None):
         # Cleanup ROS
         node.destroy_node()
         rclpy.shutdown()
-
-
-if __name__ == "__main__":
-    main()
