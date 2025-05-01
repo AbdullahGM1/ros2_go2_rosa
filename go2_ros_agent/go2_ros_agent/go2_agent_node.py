@@ -254,7 +254,7 @@ class Go2AgentNode(Node):
             # FIXED: Get initial pose with better error handling
             try:
                 # CRITICAL FIX: Remove input parameter - this was causing the error
-                initial_pose = get_robot_pose.invoke(input={})
+                initial_pose = get_robot_pose.invoke(input="")
                 if "error" in initial_pose:
                     return f"Error getting pose: {initial_pose['error']}"
                 
@@ -319,7 +319,7 @@ class Go2AgentNode(Node):
                     
                     # Get current pose with better error handling
                     try:
-                        current_pose = get_robot_pose.invoke(input={})
+                        current_pose = get_robot_pose.invoke(input="")
                         if "error" in current_pose:
                             return f"Error during movement: {current_pose['error']}"
                             
@@ -386,7 +386,7 @@ class Go2AgentNode(Node):
             
             # Get final position after motion
             try:
-                final_pose = get_robot_pose.invoke(input={})
+                final_pose = get_robot_pose.invoke(input="")
                 if "error" not in final_pose:
                     # Calculate actual distance moved
                     dx = final_pose["x"] - initial_x
@@ -426,7 +426,7 @@ class Go2AgentNode(Node):
             
             # Get initial pose with improved error handling
             try:
-                initial_pose = get_robot_pose.invoke(input={})
+                initial_pose = get_robot_pose.invoke(input="")
                 if "error" in initial_pose:
                     return f"Error getting pose: {initial_pose['error']}"
                     
@@ -495,7 +495,7 @@ class Go2AgentNode(Node):
                     
                     # Get current pose with error handling
                     try:
-                        current_pose = get_robot_pose.invoke(input={})
+                        current_pose = get_robot_pose.invoke(input="")
                         if "error" in current_pose:
                             return f"Error during rotation: {current_pose['error']}"
                             
@@ -566,7 +566,7 @@ class Go2AgentNode(Node):
             
             # Get final angle after motion
             try:
-                final_pose = get_robot_pose.invoke(input={})
+                final_pose = get_robot_pose.invoke()
                 if "error" not in final_pose:
                     # Calculate actual rotation in degrees
                     actual_rotation = math.degrees(final_pose["yaw"] - initial_pose["yaw"])
@@ -592,7 +592,7 @@ class Go2AgentNode(Node):
 
         # ============================= SENSOR TOOLS =============================
         @tool
-        def get_robot_pose() -> dict:
+        def get_robot_pose(input: str) -> dict:
             """
             Get the pose of the Unitree Go2 robot from odometry data.
             Returns position, orientation, and velocity information.
@@ -751,7 +751,7 @@ class Go2AgentNode(Node):
             # Get current pose with minimal processing
             try:
                 # CRITICAL FIX: Remove input parameter - this was causing the error
-                current_pose = get_robot_pose.invoke(input={})
+                current_pose = get_robot_pose.invoke(input="")
                 if "error" in current_pose:
                     return f"Error getting initial pose: {current_pose['error']}"
                 
@@ -798,7 +798,7 @@ class Go2AgentNode(Node):
                     node_instance.logger.info(f"Rotating {rotation_degrees:.1f}° to face target")
                     
                     # FIXED: Track rotation status and handle potential errors
-                    rotation_result = publish_angular_motion.invoke(input={"angle": rotation_degrees})
+                    rotation_result = publish_angular_motion.invoke(angle=rotation_degrees)
                     if "Error" in rotation_result or "timed out" in rotation_result:
                         node_instance.logger.warning(f"Rotation issue: {rotation_result}")
                         # Try to continue anyway - the rotation might be close enough
@@ -813,7 +813,7 @@ class Go2AgentNode(Node):
                 # FIXED: Get current pose again after rotation for better accuracy
                 try:
                     # CRITICAL FIX: Remove input parameter - this was causing the error
-                    current_pose = get_robot_pose.invoke(input={})
+                    current_pose = get_robot_pose.invoke(input="")
                     if "error" not in current_pose:
                         # Recalculate distance after rotation
                         current_x = current_pose["x"]
@@ -828,7 +828,7 @@ class Go2AgentNode(Node):
                 # Step 2: Move forward to the target
                 node_instance.logger.info(f"Moving forward {distance_to_target:.2f}m to target")
                 
-                movement_result = publish_linear_motion.invoke(input={"distance": distance_to_target})
+                movement_result = publish_linear_motion.invoke(distance=distance_to_target)
                 if "Error" in movement_result or "timed out" in movement_result:
                     node_instance.logger.warning(f"Movement issue: {movement_result}")
                 
@@ -836,7 +836,7 @@ class Go2AgentNode(Node):
                 if time.time() - start_time < max_execution_time - 1:
                     try:
                         # CRITICAL FIX: Remove input parameter - this was causing the error
-                        final_pose = get_robot_pose.invoke(input={})
+                        final_pose = get_robot_pose.invoke()
                         final_x = final_pose.get("x", "unknown")
                         final_y = final_pose.get("y", "unknown")
                         final_position = f"({final_x}, {final_y})"
@@ -948,7 +948,7 @@ class Go2AgentNode(Node):
             
             # Try to get robot pose
             try:
-                pose = get_robot_pose.invoke(input={})
+                pose = get_robot_pose.invoke(input="")
                 if "error" not in pose:
                     status["position"] = {
                         "x": pose["x"],
@@ -1008,8 +1008,7 @@ def main(args=None):
                 # Test ROS topic connections
                 pose_tool = node._create_tools()[2]  # get_robot_pose
                 
-                # ADD THIS LINE:
-                pose_result = pose_tool.invoke(input={})
+                pose_result = pose_tool.invoke(input="")
                 
                 if "error" in pose_result:
                     print(f"⚠️ Warning: Could not get robot pose: {pose_result['error']}")
@@ -1074,7 +1073,7 @@ def main(args=None):
                 elif command.lower() == "status":
                     # Special direct command to check system status
                     system_status_tool = node._create_tools()[7]  # get the system_status tool
-                    status = system_status_tool.invoke(input={})
+                    status = system_status_tool.invoke()
                     print("\n🤖 Go2: Current system status:")
                     for key, value in status.items():
                         print(f"  {key}: {value}")
