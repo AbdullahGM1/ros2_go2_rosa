@@ -24,11 +24,501 @@ from sensor_msgs.msg import Image
 import cv2
 from cv_bridge import CvBridge
 import threading
+
 import asyncio
 import signal
 import sys
 from functools import partial
+import asyncio
+import re
+import os
+import signal
+import sys
+import threading
+import time
+from datetime import datetime
+from functools import partial
+from rich.console import Console
+from rich.panel import Panel
+from rich.markdown import Markdown
+from rich.text import Text
+from rich.table import Table
+from rich.live import Live
+from rich.layout import Layout
+from rich.box import ROUNDED
+from rich.style import Style
+import asyncio
+import re
+import os
+import io
+import signal
+import sys
+import threading
+import time
+import logging
+from datetime import datetime
+from queue import Queue
+from rich.console import Console
+from rich.panel import Panel
+from rich.markdown import Markdown
+from rich.text import Text
+from rich.table import Table
+from rich.live import Live
+from rich.logging import RichHandler
 
+# Custom log handler that captures logs for the rich console
+class LogCapture(logging.Handler):
+    def __init__(self, log_queue):
+        super().__init__()
+        self.log_queue = log_queue
+        # Set a formatter that preserves the original log format
+        self.setFormatter(logging.Formatter('%(levelname)s: %(message)s'))
+    
+    def emit(self, record):
+        # Get the formatted log message
+        log_entry = self.format(record)
+        # Add timestamp
+        timestamp = datetime.fromtimestamp(record.created).strftime('%H:%M:%S')
+        # Add level-based styling
+        if record.levelno >= logging.ERROR:
+            styled_log = f"[bold red][{timestamp}] {log_entry}[/bold red]"
+        elif record.levelno >= logging.WARNING:
+            styled_log = f"[yellow][{timestamp}] {log_entry}[/yellow]"
+        elif record.levelno >= logging.INFO:
+            styled_log = f"[green][{timestamp}] {log_entry}[/green]"
+        else:
+            styled_log = f"[dim][{timestamp}] {log_entry}[/dim]"
+        # Add to queue
+        self.log_queue.put(styled_log)
+
+class StdoutCapture:
+    def __init__(self, log_queue):
+        self.log_queue = log_queue
+        self.terminal = sys.stdout
+    
+    def write(self, message):
+        # Write to the terminal
+        self.terminal.write(message)
+        # If it's not just a newline or empty string, add to the log queue
+        if message and message.strip() and not message.isspace():
+            timestamp = datetime.now().strftime('%H:%M:%S')
+            styled_message = f"[blue][{timestamp}] {message.strip()}[/blue]"
+            self.log_queue.put(styled_message)
+    
+    def flush(self):
+        self.terminal.flush()
+
+class StderrCapture:
+    def __init__(self, log_queue):
+        self.log_queue = log_queue
+        self.terminal = sys.stderr
+    
+    def write(self, message):
+        # Write to the terminal
+        self.terminal.write(message)
+        # If it's not just a newline, add to the log queue
+        if message and message.strip() and not message.isspace():
+            timestamp = datetime.now().strftime('%H:%M:%S')
+            styled_message = f"[bold red][{timestamp}] {message.strip()}[/bold red]"
+            self.log_queue.put(styled_message)
+    
+    def flush(self):
+        self.terminal.flush()
+
+class RichGo2CLI:
+    """Rich command-line interface for the Go2AgentNode."""
+
+    def __init__(self, node):
+        """
+        Initialize the rich CLI interface.
+        
+        Args:
+            node (Go2AgentNode): The ROS2 node instance to interact with
+        """
+        self.node = node
+        self.console = Console()
+        self.command_history = []
+        self.history_index = 0
+        # Queue for log messages
+        self.log_queue = Queue()
+        self.log_messages = []
+        self.max_log_lines = 100  # Maximum number of log lines to keep
+        
+        # Set up logging capture
+        self.setup_logging_capture()
+        
+        self.examples = [
+            "move forward 2 meters",
+            "turn right 90 degrees",
+            "go to position 5.0 3.5",
+            "patrol area 4.0 5.0 2",
+            "show me what you see",
+            "what's your current position?",
+        ]
+        
+        # Command handlers
+        self.command_handlers = {
+            "help": self.show_help,
+            "status": self.show_status,
+            "stop": self.emergency_stop,
+            "examples": self.show_examples,
+            "clear": self.clear_screen,
+            "logs": self.show_logs,
+            "exit": self.exit_program,
+            "quit": self.exit_program,
+        }
+        
+        # Set up signal handlers
+        signal.signal(signal.SIGINT, self.handle_interrupt)
+    
+    def setup_logging_capture(self):
+        """Set up capture of logs and terminal output."""
+        # Set up ROS logger capture
+        root_logger = logging.getLogger()
+        # Clear existing handlers to avoid duplicates
+        for handler in root_logger.handlers[:]:
+            root_logger.removeHandler(handler)
+        # Add our custom handler
+        log_handler = LogCapture(self.log_queue)
+        root_logger.addHandler(log_handler)
+        # Set minimum level
+        root_logger.setLevel(logging.INFO)
+        
+        # Capture stdout and stderr
+        sys.stdout = StdoutCapture(self.log_queue)
+        sys.stderr = StderrCapture(self.log_queue)
+        
+        # Start log processing thread
+        self.log_thread = threading.Thread(target=self.process_logs, daemon=True)
+        self.log_thread.start()
+    
+    def process_logs(self):
+        """Process incoming logs in a separate thread."""
+        while True:
+            try:
+                # Get log message from queue
+                log_message = self.log_queue.get()
+                # Add to our log buffer
+                self.log_messages.append(log_message)
+                # Keep log buffer at a reasonable size
+                if len(self.log_messages) > self.max_log_lines:
+                    self.log_messages.pop(0)
+                self.log_queue.task_done()
+            except Exception:
+                # Just continue on any error
+                pass
+            time.sleep(0.1)  # Short sleep to prevent CPU hogging
+    
+    def show_logs(self):
+        """Display the captured log messages."""
+        # Create a panel with the logs
+        if not self.log_messages:
+            self.console.print("[yellow]No log messages captured yet.[/yellow]")
+            return
+        
+        log_text = "\n".join(self.log_messages[-40:])  # Show last 40 logs
+        log_panel = Panel(
+            log_text,
+            title=f"System Logs (last {min(40, len(self.log_messages))} entries)",
+            border_style="blue",
+            expand=False
+        )
+        self.console.print(log_panel)
+    
+    def handle_interrupt(self, sig, frame):
+        """Handle SIGINT (Ctrl+C) gracefully."""
+        self.console.print("\n[yellow]Interrupted. Type 'exit' to quit or 'stop' for emergency stop.[/yellow]")
+    
+    def show_greeting(self):
+        """Display the greeting message."""
+        greeting = Text("\n🐕 Welcome to the Unitree Go2 ROSA Agent! 🤖\n")
+        greeting.stylize("bold blue")
+        
+        # Show available commands
+        commands = ", ".join(sorted(self.command_handlers.keys()))
+        greeting.append(f"Available commands: {commands}", style="italic cyan")
+        
+        self.console.print(greeting)
+    
+    def show_help(self):
+        """Display help information."""
+        help_table = Table(title="Go2 Robot Commands", box="ROUNDED", border_style="blue")
+        help_table.add_column("Command", style="cyan")
+        help_table.add_column("Description", style="green")
+        help_table.add_column("Example", style="yellow italic")
+        
+        # Basic commands
+        help_table.add_row("help", "Show this help message", "help")
+        help_table.add_row("status", "Show robot status", "status")
+        help_table.add_row("stop", "Emergency stop the robot", "stop")
+        help_table.add_row("examples", "Show example commands", "examples")
+        help_table.add_row("logs", "Show recent system logs", "logs")
+        help_table.add_row("clear", "Clear the screen", "clear")
+        help_table.add_row("exit, quit", "Exit the program", "exit")
+        
+        # Movement commands
+        help_table.add_section()
+        help_table.add_row("move [direction] [distance]", "Move the robot", "move forward 2")
+        help_table.add_row("turn [direction] [angle]", "Rotate the robot", "turn right 90")
+        help_table.add_row("go to position [x] [y]", "Navigate to coordinates", "go to position 3 4")
+        help_table.add_row("patrol area [width] [height] [loops]", "Patrol rectangular area", "patrol area 4 5 2")
+        
+        # Sensor commands  
+        help_table.add_section()
+        help_table.add_row("show camera", "Display robot camera feed", "show camera")
+        help_table.add_row("stop camera", "Stop camera feed", "stop camera")
+        help_table.add_row("what's my position", "Show current position", "what's my position")
+        
+        # Additional note
+        note = "\nYou can use natural language to control the robot. The commands listed are just examples."
+        
+        self.console.print(help_table)
+        self.console.print(Markdown(note))
+    
+    def show_examples(self):
+        """Show example commands the user can try."""
+        examples_panel = Panel(
+            "\n".join([f"• {example}" for example in self.examples]),
+            title="Example Commands",
+            border_style="green",
+            expand=False
+        )
+        self.console.print(examples_panel)
+    
+    def clear_screen(self):
+        """Clear the terminal screen."""
+        os.system('cls' if os.name == 'nt' else 'clear')
+    
+    def emergency_stop(self):
+        """Perform emergency stop of the robot."""
+        try:
+            twist = Twist()
+            self.node.publisher_.publish(twist)
+            for _ in range(5):  # Send multiple stop commands to ensure it stops
+                self.node.publisher_.publish(twist)
+                time.sleep(0.01)
+            
+            stop_panel = Panel(
+                "🛑 Robot movement halted. All motors stopped.",
+                title="EMERGENCY STOP",
+                border_style="red",
+                expand=False
+            )
+            self.console.print(stop_panel)
+            return True
+        except Exception as e:
+            self.console.print(f"[red]Error during emergency stop: {str(e)}[/red]")
+            return False
+    
+    def exit_program(self):
+        """Exit the program gracefully."""
+        self.console.print("[yellow]Shutting down...[/yellow]")
+        
+        # Stop any ongoing movements
+        self.emergency_stop()
+        
+        # Stop camera if active
+        with self.node.camera_lock:
+            if self.node.camera_active:
+                self.node.camera_active = False
+                
+        if self.node.camera_thread is not None and self.node.camera_thread.is_alive():
+            self.node.camera_thread.join(timeout=1.0)
+            
+        # Close OpenCV windows
+        try:
+            import cv2
+            cv2.destroyAllWindows()
+        except:
+            pass
+        
+        # Set running flag to stop ROS thread
+        self.node.running = False
+        
+        # Exit program
+        self.console.print("[green]Goodbye![/green]")
+        sys.exit(0)
+    
+    def show_status(self):
+        """Show current robot status."""
+        try:
+            pose = self.node.get_robot_pose.invoke({})
+            if "error" in pose:
+                self.console.print(f"[red]Error getting pose: {pose['error']}[/red]")
+                return False
+            
+            # Create status table
+            status_table = Table(title="Go2 Robot Status", box="ROUNDED", border_style="blue")
+            
+            # Position section
+            status_table.add_column("Parameter", style="cyan")
+            status_table.add_column("Value", style="green")
+            
+            # Get cardinal direction
+            yaw_deg = pose["yaw_degrees"]
+            directions = ["N", "NE", "E", "SE", "S", "SW", "W", "NW", "N"]
+            index = round(((yaw_deg % 360) / 45))
+            cardinal = directions[index]
+            
+            # Position info
+            status_table.add_row("Position X", f"{pose['x']:.2f} m")
+            status_table.add_row("Position Y", f"{pose['y']:.2f} m")
+            status_table.add_row("Position Z", f"{pose['z']:.2f} m")
+            
+            # Orientation
+            status_table.add_row("Heading", f"{yaw_deg:.1f}° ({cardinal})")
+            status_table.add_row("Roll", f"{pose['roll_degrees']:.1f}°")
+            status_table.add_row("Pitch", f"{pose['pitch_degrees']:.1f}°")
+            
+            # Motion
+            linear_speed = (pose['linear_x']**2 + pose['linear_y']**2 + pose['linear_z']**2)**0.5
+            angular_speed = (pose['angular_x']**2 + pose['angular_y']**2 + pose['angular_z']**2)**0.5
+            
+            status_str = "Stationary"
+            if linear_speed > 0.05 and angular_speed > 0.05:
+                status_str = f"Moving and turning ({linear_speed:.2f} m/s, {angular_speed:.2f} rad/s)"
+            elif linear_speed > 0.05:
+                status_str = f"Moving ({linear_speed:.2f} m/s)"
+            elif angular_speed > 0.05:
+                status_str = f"Turning ({angular_speed:.2f} rad/s)"
+                
+            status_table.add_row("Motion Status", status_str)
+            
+            timestamp = datetime.now().strftime("%H:%M:%S")
+            footer = Text(f"Status as of {timestamp}")
+            footer.stylize("italic")
+            
+            # Display status
+            self.console.print(status_table)
+            self.console.print(footer)
+            return True
+            
+        except Exception as e:
+            self.console.print(f"[red]Error retrieving status: {str(e)}[/red]")
+            return False
+    
+    def extract_thinking(self, response):
+        """
+        Extract thinking process from <think> tags and format it nicely.
+        
+        Args:
+            response (str): The response containing thinking tags
+            
+        Returns:
+            tuple: (thinking_content, clean_response)
+        """
+        thinking = ""
+        response_text = response
+        
+        # Find all <think> blocks
+        think_pattern = r'<think>([\s\S]*?)</think>'
+        think_matches = re.findall(think_pattern, response)
+        
+        if think_matches:
+            # Join all thinking blocks if there are multiple
+            thinking = "\n".join(think_match.strip() for think_match in think_matches)
+            
+            # Remove the <think> blocks from the response
+            response_text = re.sub(think_pattern, '', response).strip()
+        
+        return thinking, response_text
+    
+    async def process_command(self, command):
+        """
+        Process a user command, either executing a built-in command or
+        sending it to the LLM agent.
+        
+        Args:
+            command (str): The user command to process
+        """
+        # Skip empty commands
+        if not command or command.isspace():
+            return
+        
+        # Add to command history
+        self.command_history.append(command)
+        self.history_index = len(self.command_history)
+        
+        # Handle special commands
+        command_lower = command.lower().strip()
+        if command_lower in self.command_handlers:
+            self.command_handlers[command_lower]()
+            return
+        
+        # If not a built-in command, process with LLM agent
+        self.console.print(f"[cyan]Processing: {command}[/cyan]")
+        
+        # Create a thread for the agent processing
+        result = [None]
+        error = [None]
+        
+        def process_command():
+            try:
+                result[0] = self.node.agent.invoke(command)
+            except Exception as e:
+                error[0] = str(e)
+        
+        agent_thread = threading.Thread(target=process_command)
+        agent_thread.daemon = True
+        agent_thread.start()
+        
+        # Create a better animation using Rich's built-in Live display
+        with self.console.status("[yellow]Thinking...[/yellow]", spinner="dots") as status:
+            # Wait for processing to complete or timeout
+            timeout = 60  # 60 seconds max wait
+            start_time = time.time()
+            
+            while agent_thread.is_alive() and time.time() - start_time < timeout:
+                await asyncio.sleep(0.1)
+        
+        # Check result
+        if agent_thread.is_alive():
+            self.console.print("[red]Response taking too long! Consider using emergency stop if robot is moving.[/red]")
+            return
+        elif error[0]:
+            self.console.print(Panel(f"Error: {error[0]}", title="Error", border_style="red"))
+            return
+        
+        # Process response
+        response = result[0]
+        thinking, clean_response = self.extract_thinking(response)
+        
+        # Show thinking panel if available
+        if thinking:
+            self.console.print(Panel(
+                Markdown(thinking), 
+                title="Thinking Process", 
+                border_style="yellow"
+            ))
+        
+        # Show response panel
+        self.console.print(Panel(
+            Markdown(clean_response), 
+            title="Go2 Response", 
+            border_style="green"
+        ))
+    
+    async def run(self):
+        """Run the main command loop."""
+        self.clear_screen()
+        self.show_greeting()
+        
+        while True:
+            try:
+                # Show prompt
+                self.console.print("[bold green]🤖 Go2 >[/bold green] ", end="")
+                command = input()
+                
+                # Process the command
+                await self.process_command(command)
+                
+            except KeyboardInterrupt:
+                self.console.print("\n[yellow]Command interrupted. Type 'stop' for emergency stop.[/yellow]")
+                continue
+            except EOFError:
+                self.exit_program()
+            except Exception as e:
+                self.console.print(f"[red]Error: {str(e)}[/red]")
 
 class Go2AgentNode(Node):
     def __init__(self):
@@ -787,31 +1277,12 @@ class Go2AgentNode(Node):
             patrol_area
         ]
 
-
 def main(args=None):
-    """Main function to initialize and run the Go2AgentNode with improved CLI including visible thinking"""
-    import readline  # Add command history and editing capabilities
-    import os
-    from colorama import init, Fore, Style, Back  # For colored output
-    import threading
-    import time
-    import re  # Import regex for pattern matching
-    
-    # Initialize colorama
-    init()
-    
-    # Initialize ROS
+    """Main function to run the Go2AgentNode with rich CLI."""
     rclpy.init(args=args)
-    node = Go2AgentNode()
     
-    # Command history file
-    history_file = os.path.expanduser('~/.go2agent_history')
-    try:
-        readline.read_history_file(history_file)
-        # Set history file size
-        readline.set_history_length(1000)
-    except FileNotFoundError:
-        pass
+    # Create the node directly instead of importing it
+    node = Go2AgentNode()
     
     # Create a separate thread for processing ROS callbacks
     def spin_thread():
@@ -822,183 +1293,18 @@ def main(args=None):
     ros_thread.daemon = True
     ros_thread.start()
 
+    # Create and run the rich CLI
+    cli = RichGo2CLI(node)
     try:
-        # ============================= INTERACTIVE COMMAND LOOP =============================
-        print(f"{Fore.GREEN}🐕 Unitree Go2 ROSA Agent initialized. Ready for commands.{Style.RESET_ALL}")
-        print(f"{Fore.CYAN}Type 'exit' or 'quit' to exit, 'help' for available commands.{Style.RESET_ALL}")
-        
-        # Simple built-in commands with improved output
-        def show_help():
-            help_text = f"""
-{Fore.YELLOW}=== Available Commands ==={Style.RESET_ALL}
-{Fore.GREEN}Basic Commands:{Style.RESET_ALL}
-  {Fore.CYAN}help{Style.RESET_ALL}             Show this help message
-  {Fore.CYAN}status{Style.RESET_ALL}           Show robot status
-  {Fore.CYAN}stop{Style.RESET_ALL}             Emergency stop the robot
-  {Fore.CYAN}quit, exit{Style.RESET_ALL}       Exit the program
-
-{Fore.GREEN}Movement Commands (Natural Language):{Style.RESET_ALL}
-  {Fore.CYAN}move forward 1.5{Style.RESET_ALL}       Move forward 1.5 meters
-  {Fore.CYAN}turn right 90{Style.RESET_ALL}          Turn 90 degrees clockwise
-  {Fore.CYAN}go to position 2.5 3.0{Style.RESET_ALL} Move to position (2.5, 3.0)
-  {Fore.CYAN}patrol area 4 5{Style.RESET_ALL}        Patrol a 4x5 meter rectangle
-
-{Fore.GREEN}Sensor Commands:{Style.RESET_ALL}
-  {Fore.CYAN}show camera{Style.RESET_ALL}            Show camera feed
-  {Fore.CYAN}what's my position{Style.RESET_ALL}     Show current position
-  {Fore.CYAN}stop camera{Style.RESET_ALL}            Stop camera feed
-
-You can use natural language to control the robot. Examples:
-- "Move forward 2 meters then turn left 45 degrees"
-- "Go to the coordinates 3.5, 4.2"
-- "Show me what you see"
-- "Patrol a 5 by 6 meter area twice"
-            """
-            print(help_text)
-        
-        def emergency_stop():
-            try:
-                twist = Twist()
-                node.publisher_.publish(twist)
-                for _ in range(5):  # Send multiple stop commands to ensure it stops
-                    node.publisher_.publish(twist)
-                    time.sleep(0.01)
-                print(f"{Fore.RED}🛑 EMERGENCY STOP ACTIVATED - Robot movement halted{Style.RESET_ALL}")
-            except Exception as e:
-                print(f"{Fore.RED}Error during emergency stop: {str(e)}{Style.RESET_ALL}")
-        
-        # Map built-in commands
-        builtin_commands = {
-            'help': show_help,
-            'status': lambda: print(f"{Fore.YELLOW}Getting robot status...{Style.RESET_ALL}"),
-            'stop': emergency_stop,
-            'robot status': lambda: print(f"{Fore.YELLOW}Getting robot status...{Style.RESET_ALL}"),
-        }
-        
-        # Function to extract and format thinking process
-        def extract_thinking(response):
-            """Extract thinking process from <think> tags and format it nicely"""
-            thinking = ""
-            response_text = response
-            
-            # Find all <think> blocks
-            think_pattern = r'<think>([\s\S]*?)</think>'
-            think_matches = re.findall(think_pattern, response)
-            
-            if think_matches:
-                # Join all thinking blocks if there are multiple
-                thinking = "\n".join(think_match.strip() for think_match in think_matches)
-                
-                # Remove the <think> blocks from the response
-                response_text = re.sub(think_pattern, '', response).strip()
-            
-            return thinking, response_text
-        
-        # Command history
-        command_history = []
-        
-        while node.running:
-            try:
-                # Display a personalized prompt with robot status
-                prompt = f"{Fore.GREEN}🤖 Go2 [✓] >{Style.RESET_ALL} "
-                user_input = input(prompt)
-                readline.write_history_file(history_file)
-                
-                input_lower = user_input.strip().lower()
-                command_history.append(input_lower)
-                
-                # Handle exit commands
-                if input_lower in ["exit", "quit"]:
-                    print(f"{Fore.YELLOW}Exiting...{Style.RESET_ALL}")
-                    break
-                    
-                # Handle built-in commands
-                elif input_lower in builtin_commands:
-                    builtin_commands[input_lower]()
-                    
-                    # For status commands, still process with the agent
-                    if input_lower not in ['help', 'stop']:
-                        pass  # Continue to agent processing
-                    else:
-                        continue
-                    
-                # Handle empty input
-                elif not input_lower:
-                    continue
-                    
-                # Process via ROSA agent
-                print(f"{Fore.CYAN}Processing: {input_lower}{Style.RESET_ALL}")
-                
-                # Create a thread for the agent processing
-                result = [None]
-                error = [None]
-                
-                def process_command():
-                    try:
-                        result[0] = node.agent.invoke(input_lower)
-                    except Exception as e:
-                        error[0] = str(e)
-                
-                agent_thread = threading.Thread(target=process_command)
-                agent_thread.daemon = True
-                agent_thread.start()
-                
-                # Wait for processing to complete (with timeout)
-                agent_thread.join(timeout=60)  # 60 seconds max wait
-                
-                if agent_thread.is_alive():
-                    print(f"{Fore.RED}Response taking too long, consider emergency stop if needed{Style.RESET_ALL}")
-                elif error[0]:
-                    print(f"{Fore.RED}Error: {error[0]}{Style.RESET_ALL}")
-                else:
-                    # Extract thinking and format the response
-                    response = result[0]
-                    thinking, clean_response = extract_thinking(response)
-                    
-                    # Display the thinking process in a clearly marked section
-                    if thinking:
-                        print(f"\n{Back.BLUE}{Fore.WHITE} THINKING PROCESS {Style.RESET_ALL}")
-                        # Format the thinking text with indentation and yellow color
-                        formatted_thinking = ""
-                        for line in thinking.split('\n'):
-                            formatted_thinking += f"{Fore.YELLOW}  │ {line}{Style.RESET_ALL}\n"
-                        print(formatted_thinking)
-                        print(f"{Back.BLUE}{Fore.WHITE} END THINKING {Style.RESET_ALL}\n")
-                    
-                    # Display the actual response
-                    print(f"{Fore.GREEN}🤖 Go2:{Style.RESET_ALL} {clean_response}")
-                    
-            except KeyboardInterrupt:
-                print(f"\n{Fore.YELLOW}[!] Command interrupted. Type 'stop' for emergency stop.{Style.RESET_ALL}")
-                continue
-            except Exception as e:
-                print(f"{Fore.RED}Error processing command: {str(e)}{Style.RESET_ALL}")
-            
+        asyncio.run(cli.run())
     except Exception as e:
-        print(f"\n{Fore.RED}[!] Error: {str(e)}{Style.RESET_ALL}")
+        print(f"Error: {str(e)}")
     finally:
-        print(f"\n{Fore.YELLOW}Shutting down...{Style.RESET_ALL}")
-        # Make sure to clean up the camera thread if it's running
-        with node.camera_lock:
-            if node.camera_active:
-                node.camera_active = False
-                
-        if node.camera_thread is not None and node.camera_thread.is_alive():
-            node.camera_thread.join(timeout=1.0)
-            
-        # Make sure all OpenCV windows are closed
-        cv2.destroyAllWindows()
-        
-        # Stop the robot
-        node.publisher_.publish(Twist())
-        
-        # Set running flag to False to stop the spin thread
+        # Cleanup
         node.running = False
-        
-        # Wait for ROS thread to finish
         if ros_thread.is_alive():
             ros_thread.join(timeout=1.0)
-            
+        
         # Cleanup ROS
         node.destroy_node()
         rclpy.shutdown()
