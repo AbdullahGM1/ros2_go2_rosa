@@ -750,7 +750,6 @@ class Go2AgentNode(Node):
             
             # Get current pose with minimal processing
             try:
-                # CRITICAL FIX: Remove input parameter - this was causing the error
                 current_pose = get_robot_pose.invoke(input="")
                 if "error" in current_pose:
                     return f"Error getting initial pose: {current_pose['error']}"
