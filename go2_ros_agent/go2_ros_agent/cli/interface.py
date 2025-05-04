@@ -17,6 +17,7 @@ from rich.panel import Panel
 from rich.markdown import Markdown
 from rich.text import Text
 from rich.table import Table
+from rich.box import ROUNDED
 from rich.live import Live
 from rich.logging import RichHandler
 import cv2
@@ -164,37 +165,54 @@ class RichGo2CLI:
         
     def show_help(self):
         """Display help information."""
-        help_table = Table(title="Go2 Robot Commands", box="ROUNDED", border_style="blue")
-        help_table.add_column("Command", style="cyan")
-        help_table.add_column("Description", style="green")
-        help_table.add_column("Example", style="yellow italic")
+        try:
+            help_table = Table(title="Go2 Robot Commands", box=ROUNDED, border_style="blue")
+
+            help_table.add_column("Command", style="cyan")
+            help_table.add_column("Description", style="green")
+            help_table.add_column("Example", style="yellow italic")
+            
+            # Basic commands
+            help_table.add_row("help", "Show this help message", "help")
+            help_table.add_row("status", "Show robot status", "status")
+            help_table.add_row("stop", "Emergency stop the robot", "stop")
+            help_table.add_row("examples", "Show example commands", "examples")
+            help_table.add_row("logs", "Show recent system logs", "logs")
+            help_table.add_row("clear", "Clear the screen", "clear")
+            help_table.add_row("exit, quit", "Exit the program", "exit")
+            
+            # Movement commands
+            help_table.add_section()
+            help_table.add_row("move [direction] [distance]", "Move the robot", "move forward 2")
+            help_table.add_row("turn [direction] [angle]", "Rotate the robot", "turn right 90")
+            help_table.add_row("go to position [x] [y]", "Navigate to coordinates", "go to position 3 4")
+            help_table.add_row("patrol area [width] [height] [loops]", "Patrol rectangular area", "patrol area 4 5 2")
+            
+            # Sensor commands
+            help_table.add_section()
+            help_table.add_row("show camera", "Display robot camera feed", "show camera")
+            help_table.add_row("stop camera", "Stop camera feed", "stop camera")
+            help_table.add_row("what's my position", "Show current position", "what's my position")
+            
+            # Original note remains the same
+            note = "\nYou can use natural language to control the robot. The commands listed are just examples."
+            
+            self.console.print(help_table)
+            self.console.print(note)
+
         
-        # Basic commands
-        help_table.add_row("help", "Show this help message", "help")
-        help_table.add_row("status", "Show robot status", "status")
-        help_table.add_row("stop", "Emergency stop the robot", "stop")
-        help_table.add_row("examples", "Show example commands", "examples")
-        help_table.add_row("logs", "Show recent system logs", "logs")
-        help_table.add_row("clear", "Clear the screen", "clear")
-        help_table.add_row("exit, quit", "Exit the program", "exit")
+        except Exception as e:
+            self.console.print(f"[red]Error in show_help: {str(e)}[/red]")
+            import traceback
+            traceback.print_exc()
         
-        # Movement commands
-        help_table.add_section()
-        help_table.add_row("move [direction] [distance]", "Move the robot", "move forward 2")
-        help_table.add_row("turn [direction] [angle]", "Rotate the robot", "turn right 90")
-        help_table.add_row("go to position [x] [y]", "Navigate to coordinates", "go to position 3 4")
-        help_table.add_row("patrol area [width] [height] [loops]", "Patrol rectangular area", "patrol area 4 5 2")
+    def show_help_debug(self):
+        """Debug version of help."""
+        self.console.print("[green]Help command called successfully![/green]")
+        self.console.print("This is a test message.")
         
-        # Sensor commands  
-        help_table.add_section()
-        help_table.add_row("show camera", "Display robot camera feed", "show camera")
-        help_table.add_row("stop camera", "Stop camera feed", "stop camera")
-        help_table.add_row("what's my position", "Show current position", "what's my position")
-        
-        note = "\nYou can use natural language to control the robot. The commands listed are just examples."
-        
-        self.console.print(help_table)
-        self.console.print(Markdown(note))
+        # Add this to your command_handlers in __init__:
+        self.command_handlers["helptest"] = self.show_help_debug
         
     def show_examples(self):
         """Show example commands the user can try."""
@@ -275,7 +293,7 @@ class RichGo2CLI:
                 self.console.print(f"[red]Error getting pose: {pose['error']}[/red]")
                 return False
                 
-            status_table = Table(title="Go2 Robot Status", box="ROUNDED", border_style="blue")
+            status_table = Table(title="Go2 Robot Status", box=ROUNDED, border_style="blue")
             status_table.add_column("Parameter", style="cyan")
             status_table.add_column("Value", style="green")
             
@@ -363,7 +381,11 @@ class RichGo2CLI:
         self.history_index = len(self.command_history)
         
         command_lower = command.lower().strip()
-        if command_lower in self.command_handlers:
+        if command_lower == "help":
+            # Direct call instead of using handlers
+            self.show_help()
+            return
+        elif command_lower in self.command_handlers:
             self.command_handlers[command_lower]()
             return
             
