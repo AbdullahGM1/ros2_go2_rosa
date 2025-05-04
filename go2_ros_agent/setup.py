@@ -13,10 +13,10 @@ setup(
     ],
     install_requires=['setuptools'],
     zip_safe=True,
-    maintainer='ab',
+    maintainer='AbdullagGN1',
     maintainer_email='agm.musalami@gmail.com',
-    description='TODO: Package description',
-    license='TODO: License declaration',
+    description='ROS2 Agent for Unitree Go2 Quadruped Robot with Natural Language Control using Large Language Models',
+    license='MIT',
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
